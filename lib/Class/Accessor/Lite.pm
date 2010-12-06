@@ -2,13 +2,37 @@ package Class::Accessor::Lite;
 
 use strict;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
+
+use Carp ();
+
+sub import {
+    shift;
+    my %args = @_;
+    my $pkg = caller(0);
+    _mk_accessors($pkg, @{$args{rw}})
+        if $args{rw};
+    _mk_ro_accessors($pkg, @{$args{ro}})
+        if $args{ro};
+    _mk_wo_accessors($pkg, @{$args{wo}})
+        if $args{rw};
+    _mk_new(
+        $pkg,
+        map { $args{$_} ? @{$args{$_}} : () } qw(rw ro wo),
+    ) if $args{new};
+    1;
+}
 
 sub mk_new_and_accessors {
     (undef, my @properties) = @_;
     my $pkg = caller(0);
-    _mk_new($pkg, @properties);
+    _mk_new($pkg);
     _mk_accessors($pkg, @properties);
+}
+
+sub mk_new {
+    my $pkg = caller(0);
+    _mk_new($pkg);
 }
 
 sub mk_accessors {
@@ -17,10 +41,22 @@ sub mk_accessors {
     _mk_accessors($pkg, @properties);
 }
 
+sub mk_ro_accessors {
+    (undef, my @properties) = @_;
+    my $pkg = caller(0);
+    _mk_ro_accessors($pkg, @properties);
+}
+
+sub mk_wo_accessors {
+    (undef, my @properties) = @_;
+    my $pkg = caller(0);
+    _mk_wo_accessors($pkg, @properties);
+}
+
 sub _mk_new {
     my $pkg = shift;
     no strict 'refs';
-    *{$pkg . '::new'} = __m_new(@_);
+    *{$pkg . '::new'} = __m_new($pkg);
 }
 
 sub _mk_accessors {
@@ -31,12 +67,28 @@ sub _mk_accessors {
     }
 }
 
+sub _mk_ro_accessors {
+    my $pkg = shift;
+    no strict 'refs';
+    for my $n (@_) {
+        *{$pkg . '::' . $n} = __m_ro($pkg, $n);
+    }
+}
+
+sub _mk_wo_accessors {
+    my $pkg = shift;
+    no strict 'refs';
+    for my $n (@_) {
+        *{$pkg . '::' . $n} = __m_wo($pkg, $n);
+    }
+}
+
 sub __m_new {
-    my @props = @_;
-    sub {
+    my $pkg = shift;
+    no strict 'refs';
+    return sub {
         my $klass = shift;
         bless {
-            (map { $_ => undef } @props),
             (@_ == 1 && ref($_[0]) eq 'HASH' ? %{$_[0]} : @_),
         }, $klass;
     };
@@ -51,6 +103,32 @@ sub __m {
     };
 }
 
+sub __m_ro {
+    my ($pkg, $n) = @_;
+    sub {
+        if (@_ == 1) {
+            return $_[0]->{$n} if @_ == 1;
+        } else {
+            my $caller = caller(0);
+            Carp::croak("'$caller' cannot access the value of '$n' on objects of class '$pkg'");
+        }
+    };
+}
+
+sub __m_wo {
+    my ($pkg, $n) = @_;
+    sub {
+        if (@_ == 1) {
+            my $caller = caller(0);
+            Carp::croak( "'$caller' cannot alter the value of '$n' on objects of class '$pkg'")
+        } else {
+            return $_[0]->{$n} = $_[1] if @_ == 2;
+            shift->{$n} = \@_;
+        }
+    };
+}
+
+
 1;
 
 __END__
@@ -63,31 +141,72 @@ Class::Accessor::Lite - a minimalistic variant of Class::Accessor
 
     package MyPackage;
 
-    use Class::Accessor::Lite;
-
-    # make accessors: "foo" and "bar"
-    Class::Accessor::Lite->mk_accessors(qw(foo bar));
-
-    # make accessors and the constructor
-    Class::Accessor::Lite->mk_new_and_accessors(qw(foo bar));
+    use Class::Accessor::Lite (
+        new => 1,
+        rw  => [ qw(foo bar) ],
+        ro  => [ qw(baz) ],
+        wo  => [ qw(hoge) ],
+    );
 
 =head1 DESCRIPTION
 
-This is a minimalitic variant of C<Class::Accessor> and its alikes.
+The module is a variant of C<Class::Accessor>.  It is fast and requires less typing, has no dependencies to other modules, and does not mess up the @ISA.
 
-It is intended to be standalone and minimal, so that it can be copy & pasted into individual perl script files.
+=head1 THE USE STATEMENT
+
+The use statement (i.e. the C<import> function) of the module takes a single hash as an argument that specifies the types and the names of the properties.  Recognises the following keys.
+
+=over 4
+
+=item new => $true_or_false
+
+the default constructor is created if the value evaluates to true, otherwise nothing is done (the default behaviour)
+
+=item rw => \@name_of_the_properties
+
+creates a read / write accessor for the name of the properties passed through as an arrayref
+
+=item ro => \@name_of_the_properties
+
+creates a write-only accessor for the name of the properties passed through as an arrayref
+
+=item rw => \@name_of_the_properties
+
+creates a read-only accessor for the name of the properties passed through as an arrayref
+
+=back
+
+For more detailed explanation read the following section describing the behaviour of each function that actually creates the accessors.
 
 =head1 FUNCTIONS
+
+As of version 0.04 the properties can be specified as the arguments to the C<use> statement (as can be seen in the SYNOPSIS) which is now the recommended way of using the module, but for compatibility the following functions are provided as well.
 
 =head2 Class::Accessor::Lite->mk_accessors(@name_of_the_properties)
 
 Creates an accessor in current package under the name specified by the arguments that access the properties (of a hashref) with the same name.
 
+=head2 Class::Accessor::Lite->mk_ro_accessors(@name_of_the_properties)
+
+Same as mk_accessors() except it will generate read-only accessors (i.e. true accessors).  If you attempt to set a value with these accessors it will throw an exception.
+
+=head2 Class::Accessor::Lite->mk_wo_accessors(@name_of_the_properties)
+
+Same as mk_accessors() except it will generate write-only accessors (i.e. mutators).  If you attempt to read a value with these accessors it will throw an exception.
+
+=head2 Class::Accessor::Lite->mk_new()
+
+Creates the C<new> function that accepts a hash or a hashref as the initial properties of the object.
+
 =head2 Class::Accessor::Lite->mk_new_and_accessors(@name_of_the_properties)
 
-Creates the C<new> function in addition to the accessors.  The function will accept a hash or a hashref as the initial properties of the object.  The default values of the properties are undef.
+DEPRECATED.  Use the new "use Class::Accessor::Lite (...)" style.
 
 =head1 FAQ
+
+=head2 Can I use C<Class::Accessor::Lite> in an inherited module?
+
+Yes in most cases, when the class object in the super class is implemeted using a hashref.  However you _should_ _not_ create the constructor for the inherited class by calling C<Class::Accessor::Lite->new()> or by C<use Class::Accessor::Lite (new => 1).  The only other thing that C<Class::Accessor::Lite> does is to set up the accessor functions for given property names through a blessed hashref.
 
 =head2 What happens when passing more than one arguments to the accessor?
 
