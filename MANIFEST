@@ -19,3 +19,4 @@ README
 t/00-base.t
 t/01-new.t
 t/02-use.t
+t/03-use-error.t
